@@ -37,7 +37,7 @@
       },
       "mgt575-demo": {
         "command": "node",
-        "args": ["REPLACE_WITH_FULL_PATH_TO_THIS_REPO/mcp-demo-server/src/index.mjs"],
+        "args": ["C:/path/to/mcp_server/mcp-demo-server/src/index.mjs"],
         "env": {
           "GEMINI_API_KEY": "Your GEMINI_API_KEY"
         }
