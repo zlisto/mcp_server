@@ -9,8 +9,11 @@
  *   ask_gemini    — text → Gemini (simple LLM tool pattern)
  *   eagle_eye     — primary monitor screenshot + query → Gemini vision
  *   draw_image    — text prompt → Gemini native image model → saves PNG/JPEG to a folder you choose
+ *   make_song     — text → Lyria 3 Clip (~30s) → save audio; optional ffmpeg→MP3; open default player
  *
+ * Env (text/vision): GEMINI_TEXT_MODEL optional (default gemini-3.1-flash-lite-preview). ask_gemini + eagle_eye.
  * Env (image): GEMINI_IMAGE_MODEL optional (default gemini-3.1-flash-image-preview). Same GEMINI_API_KEY.
+ * Env (music): GEMINI_MUSIC_MODEL optional (default lyria-3-clip-preview). Requires Lyria access on the API key.
  *
  * Cursor: add to ~/.cursor/mcp.json (merge into mcpServers):
  *   "mgt575-demo": {
@@ -27,20 +30,23 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { GoogleGenAI, Modality } from "@google/genai";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
 const execFileP = promisify(execFile);
 
+const DEFAULT_TEXT_MODEL = "gemini-3.1-flash-lite-preview";
+
 function getGeminiModel() {
   const key = process.env.GEMINI_API_KEY;
   if (!key?.trim()) {
     throw new Error("Missing GEMINI_API_KEY in environment.");
   }
+  const model = (process.env.GEMINI_TEXT_MODEL || DEFAULT_TEXT_MODEL).trim();
   const gen = new GoogleGenerativeAI(key.trim());
-  return gen.getGenerativeModel({ model: "gemini-2.0-flash" });
+  return gen.getGenerativeModel({ model });
 }
 
 function getGenAiClient() {
@@ -52,6 +58,9 @@ function getGenAiClient() {
 }
 
 const DEFAULT_IMAGE_MODEL = "gemini-3.1-flash-image-preview";
+
+/** Lyria 3 Clip: ~30s clips (Gemini API). Override with GEMINI_MUSIC_MODEL (e.g. lyria-3-pro-preview for longer). */
+const DEFAULT_MUSIC_MODEL = "lyria-3-clip-preview";
 
 function extForMime(mime) {
   const m = (mime || "").toLowerCase();
@@ -73,6 +82,135 @@ function extractFirstImageFromResponse(response) {
     }
   }
   return null;
+}
+
+/** Walk candidates for first audio/* inlineData (Lyria / native audio output). */
+function extractFirstAudioFromResponse(response) {
+  const cands = response?.candidates ?? [];
+  for (const c of cands) {
+    const parts = c?.content?.parts ?? [];
+    for (const p of parts) {
+      const id = p?.inlineData;
+      if (id?.data && typeof id.data === "string" && id.mimeType?.toLowerCase().startsWith("audio/")) {
+        return { data: id.data, mimeType: id.mimeType };
+      }
+    }
+  }
+  return null;
+}
+
+function extForAudioMime(mime) {
+  const m = (mime || "").toLowerCase();
+  if (m.includes("mpeg") || m.includes("mp3")) return ".mp3";
+  if (m.includes("wav") || m.includes("wave")) return ".wav";
+  if (m.includes("ogg")) return ".ogg";
+  if (m.includes("mp4") || m.includes("aac")) return ".m4a";
+  if (m.includes("flac")) return ".flac";
+  return ".bin";
+}
+
+/** Best-effort WAV → MP3 if `ffmpeg` is on PATH. Returns path to MP3 or null. */
+async function tryWavToMp3WithFfmpeg(wavPath) {
+  try {
+    const mp3Path = wavPath.replace(/\.(wav|wave)$/i, ".mp3");
+    await execFileP(
+      "ffmpeg",
+      ["-y", "-i", wavPath, "-codec:a", "libmp3lame", "-qscale:a", "4", mp3Path],
+      { windowsHide: true, maxBuffer: 20 * 1024 * 1024 }
+    );
+    await fs.unlink(wavPath);
+    return mp3Path;
+  } catch {
+    return null;
+  }
+}
+
+function playAudioFile(outPath) {
+  const abs = path.resolve(outPath);
+  if (process.platform === "win32") {
+    const child = spawn("cmd.exe", ["/c", "start", "", abs], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.unref();
+    return;
+  }
+  if (process.platform === "darwin") {
+    const child = spawn("open", [abs], { detached: true, stdio: "ignore" });
+    child.unref();
+    return;
+  }
+  const child = spawn("xdg-open", [abs], { detached: true, stdio: "ignore" });
+  child.unref();
+}
+
+async function makeSongToFolder({
+  text: textArg,
+  folder: folderArg,
+  filename: filenameArg,
+  preferMp3,
+  play: playArg,
+}) {
+  const folder = path.resolve(String(folderArg || "").trim());
+  await fs.mkdir(folder, { recursive: true });
+
+  const model = (process.env.GEMINI_MUSIC_MODEL || DEFAULT_MUSIC_MODEL).trim();
+  const ai = getGenAiClient();
+  const prompt = String(textArg ?? "").trim();
+  if (!prompt) throw new Error("text is required");
+
+  const response = await ai.models.generateContent({
+    model,
+    contents: prompt,
+    config: {
+      responseModalities: [Modality.TEXT, Modality.AUDIO],
+    },
+  });
+
+  const audio = extractFirstAudioFromResponse(response);
+  if (!audio) {
+    const note = typeof response?.text === "string" ? response.text : JSON.stringify(response).slice(0, 400);
+    throw new Error(
+      "Model returned no audio part. Check Lyria entitlement and GEMINI_MUSIC_MODEL. Snippet: " + note
+    );
+  }
+
+  let base = filenameArg ? path.basename(String(filenameArg).trim()) : "";
+  if (!base) {
+    base = `song_${Date.now()}${extForAudioMime(audio.mimeType)}`;
+  } else if (!path.extname(base)) {
+    base += extForAudioMime(audio.mimeType);
+  }
+
+  let outPath = path.join(folder, base);
+  const buf = Buffer.from(audio.data, "base64");
+  await fs.writeFile(outPath, buf);
+
+  let finalMime = audio.mimeType;
+  const wantMp3 = preferMp3 !== false;
+  const isLikelyWav =
+    /\.(wav|wave)$/i.test(outPath) ||
+    String(audio.mimeType).toLowerCase().includes("wav");
+  if (wantMp3 && isLikelyWav) {
+    const mp3 = await tryWavToMp3WithFfmpeg(outPath);
+    if (mp3) {
+      outPath = mp3;
+      finalMime = "audio/mpeg";
+    }
+  }
+
+  let played = false;
+  if (playArg !== false) {
+    try {
+      playAudioFile(outPath);
+      played = true;
+    } catch {
+      played = false;
+    }
+  }
+
+  return { outPath, mimeType: finalMime, model, played };
 }
 
 async function drawImageToFolder({ prompt, folder: folderArg, filename: filenameArg }) {
@@ -156,7 +294,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "ask_gemini",
-      description: "Ask Gemini a plain-text question (good second tool before vision).",
+      description:
+        "Ask Gemini a plain-text question (default model: gemini-3.1-flash-lite-preview; override with GEMINI_TEXT_MODEL).",
       inputSchema: {
         type: "object",
         properties: {
@@ -172,7 +311,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "eagle_eye",
       description:
-        "Captures the primary monitor, sends the screenshot + your question to Gemini, returns its answer. " +
+        "Captures the primary monitor, sends the screenshot + your question to Gemini (same default text/vision model as ask_gemini; GEMINI_TEXT_MODEL). " +
         "Privacy: anything visible on screen is sent to Google. Teaching use only.",
       inputSchema: {
         type: "object",
@@ -210,6 +349,43 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
         },
         required: ["prompt", "folder"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "make_song",
+      description:
+        "Generates ~30s of music from your text prompt using Gemini Lyria 3 (default: lyria-3-clip-preview). " +
+        "Saves audio under the folder you specify. If the API returns WAV and ffmpeg is on PATH, converts to MP3. " +
+        "Then opens the file with the OS default player (Windows: start; macOS: open; Linux: xdg-open). " +
+        "Set play=false to skip opening. Override model with GEMINI_MUSIC_MODEL.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          text: {
+            type: "string",
+            description: "Text prompt describing the music (genre, mood, instruments, tempo).",
+          },
+          folder: {
+            type: "string",
+            description: "Absolute or relative directory path where the audio file will be saved.",
+          },
+          filename: {
+            type: "string",
+            description:
+              "Optional file name only (e.g. clip.mp3). If omitted, uses song_<timestamp>.<ext>. Extension may follow API output (often WAV from Lyria).",
+          },
+          prefer_mp3: {
+            type: "boolean",
+            description:
+              "If true (default), try ffmpeg WAV→MP3 when the response is WAV. If false, keep API format.",
+          },
+          play: {
+            type: "boolean",
+            description: "If true (default), open the saved file with the default application after writing.",
+          },
+        },
+        required: ["text", "folder"],
         additionalProperties: false,
       },
     },
@@ -285,6 +461,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         2
       );
       return { content: [{ type: "text", text }] };
+    }
+
+    if (name === "make_song") {
+      const songText = String(args.text ?? "").trim();
+      const folder = String(args.folder ?? "").trim();
+      const filename = args.filename != null ? String(args.filename) : "";
+      if (!songText) throw new Error("text is required");
+      if (!folder) throw new Error("folder is required");
+      const preferMp3 = args.prefer_mp3 !== false;
+      const play = args.play !== false;
+      const result = await makeSongToFolder({
+        text: songText,
+        folder,
+        filename,
+        preferMp3,
+        play,
+      });
+      const out = JSON.stringify(result, null, 2);
+      return { content: [{ type: "text", text: out }] };
     }
 
     return {

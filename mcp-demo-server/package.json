@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Local MCP demo for MGT 575: eagle_eye, draw_image (Gemini 3.1 image), ask_gemini, ping",
+  "description": "Local MCP demo for MGT 575: make_song (Lyria 3), eagle_eye, draw_image, ask_gemini, ping",
   "scripts": {
     "start": "node src/index.mjs",
     "inspect": "npx @modelcontextprotocol/inspector node src/index.mjs"
