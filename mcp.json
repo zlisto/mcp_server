@@ -1,0 +1,46 @@
+{
+    "mcpServers": {
+      "gmail": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@gongrzhe/server-gmail-autoauth-mcp"
+        ]
+      },
+      "PowerPoint": {
+        "command": "uvx",
+        "args": [
+          "--from",
+          "office-powerpoint-mcp-server",
+          "ppt_mcp_server.exe"
+        ]
+      },
+      "Canva": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "mcp-remote@latest",
+          "https://mcp.canva.com/mcp"
+        ]
+      },
+      "spotify": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@tbrgeek/spotify-mcp-server"
+        ],
+        "env": {
+          "SPOTIFY_CLIENT_ID": "Your SPOTIFY_CLIENT_ID",
+          "SPOTIFY_CLIENT_SECRET": "Your SPOTIFY_CLIENT_SECRET",
+          "SPOTIFY_REDIRECT_URI": "http://127.0.0.1:8888/callback"
+        }
+      },
+      "mgt575-demo": {
+        "command": "node",
+        "args": ["REPLACE_WITH_FULL_PATH_TO_THIS_REPO/mcp-demo-server/src/index.mjs"],
+        "env": {
+          "GEMINI_API_KEY": "Your GEMINI_API_KEY"
+        }
+      }
+    }
+  }

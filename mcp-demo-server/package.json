@@ -1,0 +1,16 @@
+{
+  "name": "mgt575-mcp-demo-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local MCP demo for MGT 575: eagle_eye, draw_image (Gemini 3.1 image), ask_gemini, ping",
+  "scripts": {
+    "start": "node src/index.mjs",
+    "inspect": "npx @modelcontextprotocol/inspector node src/index.mjs"
+  },
+  "dependencies": {
+    "@google/genai": "^1.50.1",
+    "@google/generative-ai": "^0.24.0",
+    "@modelcontextprotocol/sdk": "^1.10.1"
+  }
+}
